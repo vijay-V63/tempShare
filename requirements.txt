@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+nanoid
+python-multipart
+httpx
