@@ -4,10 +4,13 @@ from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta
 from nanoid import generate
 import json
-from vercel_blob import put, get
+import httpx  # Add this to requirements.txt!
 
 app = FastAPI(title="TempShare")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Only import put from vercel_blob
+from vercel_blob import put
 
 class FakeRedis:
     def __init__(self):
@@ -25,6 +28,29 @@ class FakeRedis:
         return self.store.pop(key, None) is not None
 
 redis = FakeRedis()
+
+async def download_blob(pathname: str) -> tuple:
+    """Download private blob using Vercel Blob API"""
+    import os
+    token = os.environ.get("BLOB_READ_WRITE_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="BLOB_READ_WRITE_TOKEN not set")
+    
+    url = f"https://blob.vercel-storage.com/{pathname}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Blob not found")
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Blob error: {response.status_code}")
+        
+        content_type = response.headers.get("content-type", "application/octet-stream")
+        return response.content, content_type
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -49,10 +75,8 @@ async def create_clipboard(
         file_content = await file.read()
         pathname = f"uploads/{code}-{file.filename}"
         
-        # put() returns: BlobObject(url, pathname, contentType, size)
         blob = await put(pathname, file_content, {"access": "private"})
         
-        # Store pathname for private blob retrieval
         data["file_pathname"] = blob.pathname
         data["file_name"] = file.filename
         data["file_size"] = file.size
@@ -81,12 +105,12 @@ async def download_file(code: str):
     if "file_pathname" not in data:
         raise HTTPException(status_code=404, detail="No file")
     
-    # get() for private blobs returns: Blob(body, contentType, size)
-    blob = await get(data["file_pathname"], {"access": "private"})
+    # Use our custom download function
+    content, content_type = await download_blob(data["file_pathname"])
     
     return StreamingResponse(
-        blob.body,
-        media_type=blob.contentType,
+        iter([content]),  # Stream the bytes
+        media_type=content_type,
         headers={
             "Content-Disposition": f"attachment; filename={data['file_name']}",
             "Cache-Control": "private, no-cache",
