@@ -1,16 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta
 from nanoid import generate
 import json
-from vercel_blob import put
+from vercel_blob import put, get
 
 app = FastAPI(title="TempShare")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# FakeRedis for local
+# FakeRedis
 class FakeRedis:
     def __init__(self):
         self.store = {}
@@ -48,7 +48,6 @@ async def create_clipboard(
     }
 
     if file and file.size > 0:
-        # Upload to Vercel Blob
         file_content = await file.read()
         blob = await put(
             f"uploads/{code}-{file.filename}", 
@@ -73,6 +72,19 @@ async def get_clipboard(code: str):
         await redis.delete(code)
         raise HTTPException(status_code=404, detail="Expired")
     return data
+
+# Download endpoint
+@app.get("/download/{code}")
+async def download_file(code: str):
+    raw_data = await redis.get(code)
+    if not raw_data:
+        raise HTTPException(status_code=404, detail="Not found")
+    data = json.loads(raw_data)
+    if "file_url" not in data:
+        raise HTTPException(status_code=404, detail="No file")
+    # Get blob and stream
+    blob = await get(data["file_url"])
+    return StreamingResponse(blob.stream, media_type=blob.content_type, headers={"Content-Disposition": f"attachment; filename={data['file_name']}"})
 
 if __name__ == "__main__":
     import uvicorn
