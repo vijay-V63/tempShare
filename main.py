@@ -4,14 +4,11 @@ from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta
 from nanoid import generate
 import json
-import os
 from vercel_blob import put, get
 
 app = FastAPI(title="TempShare")
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# FakeRedis
 class FakeRedis:
     def __init__(self):
         self.store = {}
@@ -50,22 +47,17 @@ async def create_clipboard(
 
     if file and file.size > 0:
         file_content = await file.read()
-        
-        # ✅ Store the pathname for later retrieval (not the full URL)
         pathname = f"uploads/{code}-{file.filename}"
         
-        blob = await put(
-            pathname, 
-            file_content, 
-            {"access": "private"}
-        )
-        # Store pathname, not url - needed for private blob retrieval
-        data["file_pathname"] = pathname
+        # put() returns: BlobObject(url, pathname, contentType, size)
+        blob = await put(pathname, file_content, {"access": "private"})
+        
+        # Store pathname for private blob retrieval
+        data["file_pathname"] = blob.pathname
         data["file_name"] = file.filename
         data["file_size"] = file.size
 
     await redis.set(code, json.dumps(data), ex=expires_in)
-
     return JSONResponse({"success": True, "code": code})
 
 @app.get("/api/retrieve/{code}")
@@ -89,22 +81,17 @@ async def download_file(code: str):
     if "file_pathname" not in data:
         raise HTTPException(status_code=404, detail="No file")
     
-    try:
-        # ✅ Use pathname with access: "private" option
-        blob = await get(data["file_pathname"], {"access": "private"})
-        
-        # ✅ Python's vercel_blob returns `body`, not `stream`
-        return StreamingResponse(
-            blob.body,  # Changed from blob.stream
-            media_type=blob.contentType,  # Note: lowercase 't' in contentType
-            headers={
-                "Content-Disposition": f"attachment; filename={data['file_name']}",
-                "Cache-Control": "private, no-cache",
-                "X-Content-Type-Options": "nosniff"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Blob error: {str(e)}")
+    # get() for private blobs returns: Blob(body, contentType, size)
+    blob = await get(data["file_pathname"], {"access": "private"})
+    
+    return StreamingResponse(
+        blob.body,
+        media_type=blob.contentType,
+        headers={
+            "Content-Disposition": f"attachment; filename={data['file_name']}",
+            "Cache-Control": "private, no-cache",
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn
