@@ -5,27 +5,25 @@ import os
 from datetime import datetime, timedelta
 from nanoid import generate
 import json
+from vercel_blob import put
 
 app = FastAPI(title="TempShare")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Fake Redis for local development
+# KV or Fake
 class FakeRedis:
     def __init__(self):
         self.store = {}
-    
     async def set(self, key, value, ex=None):
         self.store[key] = {"value": value, "expires": datetime.utcnow().timestamp() + (ex or 1800)}
         return "OK"
-    
     async def get(self, key):
         data = self.store.get(key)
         if not data or datetime.utcnow().timestamp() > data["expires"]:
             self.store.pop(key, None)
             return None
         return data["value"]
-    
     async def delete(self, key):
         return self.store.pop(key, None) is not None
 
@@ -33,11 +31,6 @@ redis = FakeRedis()
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    with open("templates/index.html", "r", encoding="utf-8") as f:
-        return f.read()
-
-@app.get("/retrieve", response_class=HTMLResponse)
-async def retrieve_page():
     with open("templates/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
@@ -56,10 +49,15 @@ async def create_clipboard(
     }
 
     if file and file.size > 0:
-        # For now, we save metadata only (real upload later on Vercel)
+        # Upload to Vercel Blob
+        file_content = await file.read()
+        blob = await put(f"uploads/{code}-{file.filename}", file_content, {
+            "access": "private",
+            "addRandomSuffix": False
+        })
+        data["file_url"] = blob.url
         data["file_name"] = file.filename
         data["file_size"] = file.size
-        # TODO: Upload to Vercel Blob when deployed
 
     await redis.set(code, json.dumps(data), ex=expires_in)
 
@@ -69,14 +67,11 @@ async def create_clipboard(
 async def get_clipboard(code: str):
     raw_data = await redis.get(code)
     if not raw_data:
-        raise HTTPException(status_code=404, detail="Code expired or not found")
-    
+        raise HTTPException(status_code=404, detail="Expired or not found")
     data = json.loads(raw_data)
-    
     if datetime.utcnow().timestamp() > data.get("expires_at", 0):
         await redis.delete(code)
-        raise HTTPException(status_code=404, detail="Code has expired")
-    
+        raise HTTPException(status_code=404, detail="Expired")
     return data
 
 if __name__ == "__main__":
