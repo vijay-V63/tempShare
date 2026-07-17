@@ -5,13 +5,13 @@ import os
 from datetime import datetime, timedelta
 from nanoid import generate
 import json
-from vercel_blob import put
+from vercel_blob import put, get
 
 app = FastAPI(title="TempShare")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# KV or Fake
+# KV / Fake
 class FakeRedis:
     def __init__(self):
         self.store = {}
@@ -49,12 +49,12 @@ async def create_clipboard(
     }
 
     if file and file.size > 0:
-        # Upload to Vercel Blob
         file_content = await file.read()
-        blob = await put(f"uploads/{code}-{file.filename}", file_content, {
-            "access": "private",
-            "addRandomSuffix": False
-        })
+        blob = await put(
+            f"uploads/{code}-{file.filename}", 
+            file_content, 
+            {"access": "private"}
+        )
         data["file_url"] = blob.url
         data["file_name"] = file.filename
         data["file_size"] = file.size
