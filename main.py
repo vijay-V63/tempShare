@@ -61,7 +61,7 @@ async def create_clipboard(
 
     await redis.set(code, json.dumps(data), ex=expires_in)
 
-    return {"success": True, "code": code}
+    return JSONResponse({"success": True, "code": code})
 
 @app.get("/api/retrieve/{code}")
 async def get_clipboard(code: str):
