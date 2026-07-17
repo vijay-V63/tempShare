@@ -3,3 +3,4 @@ uvicorn
 nanoid
 python-multipart
 httpx
+vercel-blob
